@@ -36,7 +36,7 @@ async function executeCommands(
   for (const commandString of commands) {
     try {
       // Use sh -c to execute the complete command string 【0】【1】
-      const cmd = new Deno.Command("sh", {
+      const cmd = new Deno.Command("bash", {
         args: ["-c", commandString],
         env: { ...Deno.env.toObject(), ...env },
         stdout: "piped",
