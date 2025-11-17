@@ -24,30 +24,55 @@ async function loadConfig(): Promise<ServerConfig> {
   }
 }
 
-// Execute command with proper error handling
-async function executeCommand(command: string[], env: Record<string, string> = {}): Promise<{ success: boolean; output: string; error: string }> {
-  try {
-    const cmd = new Deno.Command(command[0], {
-      args: command.slice(1),
-      env: { ...Deno.env.toObject(), ...env },
-      stdout: "piped",
-      stderr: "piped",
-    });
+// Execute each command string as a complete shell command
+async function executeCommands(
+  commands: string[],
+  env: Record<string, string> = {},
+): Promise<{ success: boolean; outputs: string[]; errors: string[] }> {
+  const outputs: string[] = [];
+  const errors: string[] = [];
+  let allSuccessful = true;
 
-    const { code, stdout, stderr } = await cmd.output();
+  for (const commandString of commands) {
+    try {
+      // Use sh -c to execute the complete command string 【0】【1】
+      const cmd = new Deno.Command("sh", {
+        args: ["-c", commandString],
+        env: { ...Deno.env.toObject(), ...env },
+        stdout: "piped",
+        stderr: "piped",
+      });
 
-    return {
-      success: code === 0,
-      output: new TextDecoder().decode(stdout),
-      error: new TextDecoder().decode(stderr),
-    };
-  } catch (error) {
-    return {
-      success: false,
-      output: "",
-      error: `Command execution failed: ${error.message}`,
-    };
+      const { code, stdout, stderr } = await cmd.output();
+
+      const output = new TextDecoder().decode(stdout);
+      const error = new TextDecoder().decode(stderr);
+
+      outputs.push(output);
+      errors.push(error);
+
+      if (code !== 0) {
+        allSuccessful = false;
+        console.error(`Command failed (exit code ${code}): ${commandString}`);
+        console.error(`Error: ${error}`);
+      } else {
+        console.log(`Command succeeded: ${commandString}`);
+        if (output) console.log(`Output: ${output.trim()}`);
+      }
+    } catch (error) {
+      allSuccessful = false;
+      const errorMsg = `Command execution failed: ${error.message}`;
+      outputs.push("");
+      errors.push(errorMsg);
+      console.error(`Failed to execute: ${commandString} - ${errorMsg}`);
+    }
   }
+
+  return {
+    success: allSuccessful,
+    outputs,
+    errors,
+  };
 }
 
 // Parse request body for POST requests
@@ -76,20 +101,26 @@ async function parseRequestData(req: Request): Promise<Record<string, string>> {
   return {};
 }
 
-// Substitute variables in command
-function substituteCommand(command: string[], data: Record<string, string>): string[] {
-  return command.map(cmd => {
+// Substitute variables in command strings
+function substituteCommands(
+  commands: string[],
+  data: Record<string, string>,
+): string[] {
+  return commands.map((cmd) => {
     let result = cmd;
     for (const [key, value] of Object.entries(data)) {
-      result = result.replace(new RegExp(`\\$${key}\\b`, 'g'), value);
-      result = result.replace(new RegExp(`\\$\\{${key}\\}`, 'g'), value);
+      result = result.replace(new RegExp(`\\$${key}\\b`, "g"), value);
+      result = result.replace(new RegExp(`\\$\\{${key}\\}`, "g"), value);
     }
     return result;
   });
 }
 
 // Main request handler
-async function handleRequest(req: Request, config: ServerConfig): Promise<Response> {
+async function handleRequest(
+  req: Request,
+  config: ServerConfig,
+): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
@@ -97,16 +128,15 @@ async function handleRequest(req: Request, config: ServerConfig): Promise<Respon
   console.log(`${new Date().toISOString()} - ${method} ${path}`);
 
   // Find matching route
-  const route = config.routes.find(r => r.path === path && r.method === method);
+  const route = config.routes.find(
+    (r) => r.path === path && r.method === method,
+  );
 
   if (!route) {
-    return new Response(
-      JSON.stringify({ error: "Route not found" }),
-      { 
-        status: 404,
-        headers: { "content-type": "application/json" }
-      }
-    );
+    return new Response(JSON.stringify({ error: "Route not found" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
   }
 
   // Parse request data
@@ -118,10 +148,10 @@ async function handleRequest(req: Request, config: ServerConfig): Promise<Respon
       if (!(key in requestData)) {
         return new Response(
           JSON.stringify({ error: `Missing required field: ${key}` }),
-          { 
+          {
             status: 400,
-            headers: { "content-type": "application/json" }
-          }
+            headers: { "content-type": "application/json" },
+          },
         );
       }
 
@@ -129,35 +159,32 @@ async function handleRequest(req: Request, config: ServerConfig): Promise<Respon
       if (type === "string" && typeof requestData[key] !== "string") {
         return new Response(
           JSON.stringify({ error: `Field ${key} must be a string` }),
-          { 
+          {
             status: 400,
-            headers: { "content-type": "application/json" }
-          }
+            headers: { "content-type": "application/json" },
+          },
         );
       }
     }
   }
 
-  // Substitute variables in command
-  const finalCommand = substituteCommand(route.command, requestData);
+  // Substitute variables in command strings
+  const finalCommands = substituteCommands(route.command, requestData);
 
-  // Execute command
-  const result = await executeCommand(finalCommand);
+  // Execute commands sequentially
+  const result = await executeCommands(finalCommands);
 
   const responseData = {
     success: result.success,
-    output: result.output,
-    error: result.error,
-    command: finalCommand,
+    outputs: result.outputs,
+    errors: result.errors,
+    commands: finalCommands,
   };
 
-  return new Response(
-    JSON.stringify(responseData),
-    {
-      status: result.success ? 200 : 500,
-      headers: { "content-type": "application/json" }
-    }
-  );
+  return new Response(JSON.stringify(responseData), {
+    status: result.success ? 200 : 500,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 // Main server function
@@ -166,17 +193,22 @@ async function main() {
 
   console.log(`Starting LAN server on port ${config.port}`);
   console.log(`Configured routes:`);
-  config.routes.forEach(route => {
-    console.log(`  ${route.method} ${route.path} -> ${route.command.join(' ')}`);
+  config.routes.forEach((route) => {
+    console.log(`  ${route.method} ${route.path}:`);
+    route.command.forEach((cmd, i) => {
+      console.log(`    ${i + 1}. ${cmd}`);
+    });
   });
 
-  Deno.serve({
-    port: config.port,
-    hostname: "0.0.0.0",
-  }, (req) => handleRequest(req, config));
+  Deno.serve(
+    {
+      port: config.port,
+      hostname: "0.0.0.0",
+    },
+    (req) => handleRequest(req, config),
+  );
 }
 
 if (import.meta.main) {
   main();
 }
-
