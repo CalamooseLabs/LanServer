@@ -21,8 +21,8 @@ let
 
       command = mkOption {
         type = types.listOf types.str;
-        description = "Command to execute when route is accessed";
-        example = [ "echo" "Hello World" ];
+        description = "Command strings to execute when route is accessed";
+        example = [ "echo 'Shutting down...'" "shutdown 0" ];
       };
 
       data = mkOption {
@@ -39,6 +39,10 @@ let
     runAsRoot = cfg.runAsRoot;
     routes = cfg.routes;
   });
+
+  serverScript = pkgs.writeText "server.ts" ''
+    ${builtins.readFile ./server.ts}
+  '';
 
 in {
   options.services.lanserver = {
@@ -59,18 +63,18 @@ in {
     routes = mkOption {
       type = types.listOf routeType;
       default = [];
-      description = "List of routes and their associated commands";
+      description = "List of routes and their associated command strings";
       example = [
         {
           path = "/shutdown";
           method = "GET";
-          command = [ "shutdown" "0" ];
+          command = [ "echo 'Shutting down...'" "shutdown 0" ];
         }
         {
           path = "/status";
           method = "POST";
           data = { serviceName = "string"; };
-          command = [ "systemctl" "status" "$serviceName" ];
+          command = [ "systemctl status $serviceName" ];
         }
       ];
     };
@@ -85,6 +89,7 @@ in {
   config = mkIf cfg.enable {
     # Create config directory and file
     environment.etc."lanserver/config.json".source = configFile;
+    environment.etc."lanserver/server.ts".source = serverScript;
 
     # Create the systemd service
     systemd.services.lanserver = {
@@ -92,13 +97,28 @@ in {
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
+      # Ensure proper PATH is available for the service
+      path = with pkgs; [
+        bash
+        coreutils
+        systemd
+        util-linux
+        # Add other packages your commands might need
+      ] ++ (if cfg.runAsRoot then [ pkgs.sudo ] else []);
+
       serviceConfig = {
         Type = "simple";
         User = if cfg.runAsRoot then "root" else "lanserver";
         Group = if cfg.runAsRoot then "root" else "lanserver";
-        ExecStart = "${cfg.package}/bin/deno run --allow-read --allow-run --allow-net --allow-env ${./server.ts}";
+        ExecStart = "${cfg.package}/bin/deno run --allow-read --allow-run --allow-net /etc/lanserver/server.ts";
         Restart = "always";
         RestartSec = "10";
+
+        # Ensure PATH includes system binaries
+        Environment = [
+          "PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin"
+          "DENO_DIR=/var/cache/deno"
+        ];
 
         # Security settings (when not running as root)
       } // (optionalAttrs (!cfg.runAsRoot) {
@@ -106,12 +126,8 @@ in {
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = [ "/tmp" ];
+        ReadWritePaths = [ "/tmp" "/var/cache/deno" ];
       });
-
-      environment = {
-        DENO_DIR = "/var/cache/deno";
-      };
     };
 
     # Create user if not running as root
@@ -136,4 +152,3 @@ in {
     networking.firewall.allowedTCPPorts = [ cfg.port ];
   };
 }
-

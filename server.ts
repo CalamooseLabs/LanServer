@@ -35,7 +35,7 @@ async function executeCommands(
 
   for (const commandString of commands) {
     try {
-      // Use sh -c to execute the complete command string 【0】【1】
+      // Use bash instead of sh - bash should be available in PATH for systemd services
       const cmd = new Deno.Command("bash", {
         args: ["-c", commandString],
         env: { ...Deno.env.toObject(), ...env },
