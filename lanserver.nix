@@ -96,7 +96,7 @@ in {
         Type = "simple";
         User = if cfg.runAsRoot then "root" else "lanserver";
         Group = if cfg.runAsRoot then "root" else "lanserver";
-        ExecStart = "${cfg.package}/bin/deno run --allow-read --allow-run --allow-net ${./server.ts}";
+        ExecStart = "${cfg.package}/bin/deno run --allow-read --allow-run --allow-net --allow-env ${./server.ts}";
         Restart = "always";
         RestartSec = "10";
 
