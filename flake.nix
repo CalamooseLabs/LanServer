@@ -15,18 +15,16 @@
     self,
     ...
   } @ inputs: let
+    # Keep this for your devShell - it's fine for local usage
+    system = "x86_64-linux";
+    pkgs = import nixpkgs {system = system;};
     supportedSystems = ["x86_64-linux" "aarch64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
   in {
-    # Use forAllSystems for devShells too
-    devShells = forAllSystems (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-    in {
-      default = import ./shell.nix {
-        inherit pkgs;
-        inherit inputs;
-      };
-    });
+    devShells.${system}.default = import ./shell.nix {
+      inherit pkgs;
+      inherit inputs;
+    };
 
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
@@ -88,6 +86,7 @@
       default = self.nixosModules.lanserver;
     };
 
+    # For backwards compatibility
     nixosModule = self.nixosModules.default;
   };
 }
