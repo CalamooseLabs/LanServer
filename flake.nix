@@ -19,17 +19,70 @@
       inherit inputs;
     };
 
-    # Export the NixOS module
-    nixosModules.lanserver = import ./lanserver.nix;
+    packages = forAllSystems (system:
+            let
+              pkgs = nixpkgs.legacyPackages.${system};
+            in
+            {
+              lanserver = pkgs.stdenv.mkDerivation {
+                pname = "lanserver";
+                version = "1.0.0";
+                src = ./.;
 
-    # Alternative: you can also use 'default' if you only have one module
-    nixosModules.default = import ./lanserver.nix;
+                nativeBuildInputs = [ pkgs.deno ];
 
-    # Optional: provide the Deno server script as a package
-    packages = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system:
-      let pkgs = nixpkgs.legacyPackages.${system}; in {
-        lanserver-script = pkgs.writeText "server.ts" (builtins.readFile ./server.ts);
-      }
-    );
+                buildPhase = ''
+                  runHook preBuild
+
+                  # Set up Deno cache directory
+                  export DENO_DIR=$TMPDIR/deno_cache
+
+                  # Cache dependencies if deno.lock exists
+                  ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) ''
+                    echo "Caching dependencies from deno.lock..."
+                    deno cache --lock=deno.lock src/main.ts
+                  ''}
+
+                  # Compile to binary with specific permissions
+                  deno compile \
+                    --allow-read=/etc/lanserver \
+                    --allow-run \
+                    --allow-net \
+                    --allow-env=PATH,HOME,USER,DENO_DIR \
+                    --output lanserver \
+                    src/main.ts
+
+                  runHook postBuild
+                '';
+
+                installPhase = ''
+                  runHook preInstall
+
+                  mkdir -p $out/bin
+                  cp lanserver $out/bin/
+
+                  runHook postInstall
+                '';
+
+                meta = with pkgs.lib; {
+                  description = "LAN Command Server - HTTP server for executing system commands";
+                  license = licenses.mit;
+                  maintainers = [ ];
+                  platforms = platforms.linux;
+                };
+              };
+
+              default = self.packages.${system}.lanserver;
+            });
+
+          # NixOS module
+          nixosModules = {
+            lanserver = import ./nix/module.nix self;
+            default = self.nixosModules.lanserver;
+          };
+
+          # For backwards compatibility
+          nixosModule = self.nixosModules.default;
+        };
   };
 }

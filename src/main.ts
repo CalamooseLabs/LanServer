@@ -1,5 +1,3 @@
-#!/usr/bin/env -S deno run --allow-read --allow-run --allow-net --allow-env
-
 interface RouteConfig {
   path: string;
   method: string;

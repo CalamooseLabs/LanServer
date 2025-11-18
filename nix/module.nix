@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+flake: { config, lib, pkgs, ... }:
 
 with lib;
 
@@ -40,10 +40,6 @@ let
     routes = cfg.routes;
   });
 
-  serverScript = pkgs.writeText "server.ts" ''
-    ${builtins.readFile ./server.ts}
-  '';
-
 in {
   options.services.lanserver = {
     enable = mkEnableOption "LAN command server";
@@ -64,69 +60,56 @@ in {
       type = types.listOf routeType;
       default = [];
       description = "List of routes and their associated command strings";
-      example = [
-        {
-          path = "/shutdown";
-          method = "GET";
-          command = [ "echo 'Shutting down...'" "shutdown 0" ];
-        }
-        {
-          path = "/status";
-          method = "POST";
-          data = { serviceName = "string"; };
-          command = [ "systemctl status $serviceName" ];
-        }
-      ];
     };
 
-    package = mkOption {
-      type = types.package;
-      default = pkgs.deno;
-      description = "Deno package to use";
+    localNetworkOnly = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Whether to restrict access to local network only";
+    };
+
+    localNetworkSubnets = mkOption {
+      type = types.listOf types.str;
+      default = [ "192.168.0.0/16" "10.0.0.0/8" "172.16.0.0/12" ];
+      description = "Local network subnets to allow access from";
     };
   };
 
   config = mkIf cfg.enable {
     # Create config directory and file
     environment.etc."lanserver/config.json".source = configFile;
-    environment.etc."lanserver/server.ts".source = serverScript;
 
-    # Create the systemd service
+    # Create the systemd service using the compiled binary from the flake
     systemd.services.lanserver = {
       description = "LAN Command Server";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
 
-      # Ensure proper PATH is available for the service
       path = with pkgs; [
         bash
         coreutils
         systemd
         util-linux
-        # Add other packages your commands might need
       ] ++ (if cfg.runAsRoot then [ pkgs.sudo ] else []);
 
       serviceConfig = {
         Type = "simple";
         User = if cfg.runAsRoot then "root" else "lanserver";
         Group = if cfg.runAsRoot then "root" else "lanserver";
-        ExecStart = "${cfg.package}/bin/deno run --allow-read --allow-run --allow-net --allow-env /etc/lanserver/server.ts";
+        # Use the compiled binary from the flake package
+        ExecStart = "${flake.packages.${pkgs.system}.lanserver}/bin/lanserver";
         Restart = "always";
         RestartSec = "10";
 
-        # Ensure PATH includes system binaries
         Environment = [
           "PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin"
-          "DENO_DIR=/var/cache/deno"
         ];
-
-        # Security settings (when not running as root)
       } // (optionalAttrs (!cfg.runAsRoot) {
         NoNewPrivileges = true;
         PrivateTmp = true;
         ProtectSystem = "strict";
         ProtectHome = true;
-        ReadWritePaths = [ "/tmp" "/var/cache/deno" ];
+        ReadWritePaths = [ "/tmp" ];
       });
     };
 
@@ -143,12 +126,19 @@ in {
       lanserver = {};
     };
 
-    # Create cache directory
-    systemd.tmpfiles.rules = [
-      "d /var/cache/deno 0755 ${if cfg.runAsRoot then "root" else "lanserver"} ${if cfg.runAsRoot then "root" else "lanserver"} -"
-    ];
+    # Firewall configuration
+    networking.firewall = mkMerge [
+      (mkIf (!cfg.localNetworkOnly) {
+        allowedTCPPorts = [ cfg.port ];
+      })
 
-    # Open firewall port
-    networking.firewall.allowedTCPPorts = [ cfg.port ];
+      (mkIf cfg.localNetworkOnly {
+        extraCommands = concatStringsSep "\n" (
+          map (subnet:
+            "iptables -A nixos-fw -p tcp --source ${subnet} --dport ${toString cfg.port} -j nixos-fw-accept"
+          ) cfg.localNetworkSubnets
+        );
+      })
+    ];
   };
 }
