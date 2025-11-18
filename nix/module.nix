@@ -117,6 +117,7 @@ in {
 
           Environment = [
             "PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin"
+            "LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [pkgs.glibc pkgs.gcc-unwrapped.lib]}"
           ];
         }
         // (optionalAttrs (!cfg.runAsRoot) {

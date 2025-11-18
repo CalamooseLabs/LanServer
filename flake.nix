@@ -75,7 +75,7 @@
       };
     in {
       # Step 3: Final compilation derivation
-      lanserver = pkgs.stdenv.mkDerivation {
+      lanserver = pkgs.stdenv.mkDerivation rec {
         name = "lanserver";
         version = "1.0.0";
         src = ./.;
@@ -83,13 +83,16 @@
         nativeBuildInputs = with pkgs; [
           deno
           unzip
-          autoPatchelfHook # Essential for NixOS
+          autoPatchelfHook # This is essential
         ];
 
         buildInputs = with pkgs; [
-          stdenv.cc.cc.lib
+          stdenv.cc.cc.lib # Provides libgcc_s and libstdc++
           glibc
         ];
+
+        # Don't disable fixup - we need it for patching
+        # dontFixup = false; (this is the default)
 
         configurePhase = ''
           echo "Setting up Deno cache and denort binary"
@@ -107,28 +110,38 @@
           unzip ${denortZip}
           cd ..
 
-          # Set DENORT_BIN to point to the extracted binary
           export DENORT_BIN="$(pwd)/denort-temp/denort"
           chmod +x "$DENORT_BIN"
         '';
 
         buildPhase = ''
+          # Compile the binary
           deno compile \
             --allow-read=/etc/lanserver \
             --allow-run \
             --allow-net \
             --allow-env=PATH,HOME,USER,DENO_DIR \
             --cached-only \
-            ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) "--lock deno.lock"} \
             --output ./lanserver \
-            --target=${target} \
             src/main.ts
         '';
 
+        # Custom install phase that preserves Deno metadata
         installPhase = ''
           mkdir -p $out/bin
+
+          # Save the last 40 bytes (Deno metadata) before patching
+          tail -c 40 ./lanserver > ./deno_trailer
+
+          # Copy the binary
           cp lanserver $out/bin/
           chmod +x $out/bin/lanserver
+        '';
+
+        # Custom fixup phase to restore Deno metadata after patching
+        postFixup = ''
+          # Restore the Deno metadata trailer after autoPatchelfHook
+          cat ./deno_trailer >> $out/bin/lanserver
         '';
       };
 
