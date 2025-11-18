@@ -120,7 +120,7 @@
             --allow-read=/etc/lanserver \
             --allow-run \
             --allow-net \
-            --allow-env=PATH,HOME,USER,DENO_DIR \
+            --allow-env \
             --cached-only \
             ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) "--lock deno.lock"} \
             --output ./lanserver \
