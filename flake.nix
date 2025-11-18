@@ -83,6 +83,12 @@
         nativeBuildInputs = with pkgs; [
           deno
           unzip
+          autoPatchelfHook # Essential for NixOS
+        ];
+
+        buildInputs = with pkgs; [
+          stdenv.cc.cc.lib
+          glibc
         ];
 
         configurePhase = ''
@@ -104,13 +110,9 @@
           # Set DENORT_BIN to point to the extracted binary
           export DENORT_BIN="$(pwd)/denort-temp/denort"
           chmod +x "$DENORT_BIN"
-
-          echo "DENORT_BIN set to: $DENORT_BIN"
-          ls -la "$DENORT_BIN"
         '';
 
         buildPhase = ''
-          # Compile with pre-downloaded denort binary
           deno compile \
             --allow-read=/etc/lanserver \
             --allow-run \
@@ -126,6 +128,7 @@
         installPhase = ''
           mkdir -p $out/bin
           cp lanserver $out/bin/
+          chmod +x $out/bin/lanserver
         '';
       };
 
