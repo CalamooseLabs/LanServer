@@ -65,7 +65,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-iFh0uG2ntpClgsGqgfIRIrp4oQwHQca/iY/CYNx8Ryw=";
+        outputHash = "sha256-aWyLRra9s2HIt5WCR9VFFO+dDY61fSbEnfxWDfnu39E=";
       };
 
       # Step 2: Fetch the denort binary (not deno binary!)
