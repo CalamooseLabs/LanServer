@@ -9,13 +9,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
-
   outputs = {
     nixpkgs,
     self,
     ...
   } @ inputs: let
-    supportedSystems = ["x86_64-linux"];
+    supportedSystems = ["x86_64-linux" "aarch64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
   in {
     devShells = forAllSystems (system: let
@@ -29,58 +28,105 @@
 
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
+
+      # Target architecture for deno compile
+      target =
+        if system == "x86_64-linux"
+        then "x86_64-unknown-linux-gnu"
+        else if system == "aarch64-linux"
+        then "aarch64-unknown-linux-gnu"
+        else throw "Unsupported system: ${system}";
+
+      # Step 1: Cache dependencies in a separate derivation
+      denoCache = pkgs.stdenv.mkDerivation {
+        name = "lanserver-deno-cache";
+        src = ./.;
+        nativeBuildInputs = with pkgs; [deno];
+
+        buildPhase = ''
+          export DENO_DIR=./.deno
+          mkdir $DENO_DIR
+
+          # Cache dependencies
+          ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) ''
+            deno cache --reload --lock=deno.lock src/main.ts
+          ''}
+          ${pkgs.lib.optionalString (!builtins.pathExists ./deno.lock) ''
+            deno cache --reload src/main.ts
+          ''}
+        '';
+
+        installPhase = ''
+          mkdir $out
+          cp -r .deno/deps $out/ || true
+          cp -r .deno/npm $out/ || true
+          cp -r .deno/gen $out/ || true
+        '';
+
+        outputHashMode = "recursive";
+        outputHashAlgo = "sha256";
+        outputHash = "sha256-iFh0uG2ntpClgsGqgfIRIrp4oQwHQca/iY/CYNx8Ryw=";
+      };
+
+      # Step 2: Fetch the denort binary (not deno binary!)
+      denortZip = pkgs.fetchurl {
+        url = "https://dl.deno.land/release/v${pkgs.deno.version}/denort-${target}.zip";
+        sha256 = "sha256-qCuGkPfCb23wgFoRReAhCPQ3o6GtagWnIyuuAdqw7Ns=";
+      };
     in {
+      # Step 3: Final compilation derivation
       lanserver = pkgs.stdenv.mkDerivation {
-        pname = "lanserver";
+        name = "lanserver";
         version = "1.0.0";
         src = ./.;
 
-        nativeBuildInputs = [pkgs.deno];
+        nativeBuildInputs = with pkgs; [
+          deno
+          unzip
+        ];
+
+        configurePhase = ''
+          echo "Setting up Deno cache and denort binary"
+          export DENO_DIR=.deno
+          mkdir $DENO_DIR
+
+          # Link cached dependencies
+          ln -s ${denoCache}/deps $DENO_DIR/deps || true
+          ln -s ${denoCache}/npm $DENO_DIR/npm || true
+          ln -s ${denoCache}/gen $DENO_DIR/gen || true
+
+          # Extract denort binary from zip
+          mkdir -p ./denort-temp
+          cd ./denort-temp
+          unzip ${denortZip}
+          cd ..
+
+          # Set DENORT_BIN to point to the extracted binary
+          export DENORT_BIN="$(pwd)/denort-temp/denort"
+          chmod +x "$DENORT_BIN"
+
+          echo "DENORT_BIN set to: $DENORT_BIN"
+          ls -la "$DENORT_BIN"
+        '';
 
         buildPhase = ''
-          runHook preBuild
-
-          # Set up Deno cache directory and copy denort from nixpkgs deno
-          export DENO_DIR=$TMPDIR/deno_cache
-          mkdir -p $DENO_DIR/bin
-
-          # Copy the denort binary from the nixpkgs deno package
-          cp ${pkgs.deno}/bin/denort $DENO_DIR/bin/denort
-          chmod +x $DENO_DIR/bin/denort
-
-          # Cache dependencies if deno.lock exists
-          ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) ''
-            echo "Caching dependencies from deno.lock..."
-            deno cache --lock=deno.lock src/main.ts
-          ''}
-
-          # Compile to binary - now it will use the local denort
+          # Compile with pre-downloaded denort binary
           deno compile \
             --allow-read=/etc/lanserver \
             --allow-run \
             --allow-net \
             --allow-env=PATH,HOME,USER,DENO_DIR \
-            --output lanserver \
+            --cached-only \
+            ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) "--lock deno.lock"} \
+            --output ./lanserver \
+            --target=${target} \
             src/main.ts
-
-          runHook postBuild
         '';
 
         installPhase = ''
-          runHook preInstall
-
           mkdir -p $out/bin
           cp lanserver $out/bin/
-
-          runHook postInstall
         '';
-
-        meta = with pkgs.lib; {
-          description = "LAN Command Server - HTTP server for executing system commands";
-          license = licenses.mit;
-          maintainers = [];
-          platforms = platforms.linux;
-        };
       };
 
       default = self.packages.${system}.lanserver;
