@@ -15,16 +15,17 @@
     self,
     ...
   } @ inputs: let
-    # Keep this for your devShell - it's fine for local usage
-    system = "x86_64-linux";
-    pkgs = import nixpkgs {system = system;};
-    supportedSystems = ["x86_64-linux" "aarch64-linux"];
+    supportedSystems = ["x86_64-linux"];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
   in {
-    devShells.${system}.default = import ./shell.nix {
-      inherit pkgs;
-      inherit inputs;
-    };
+    devShells = forAllSystems (system: let
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      default = import ./shell.nix {
+        inherit pkgs;
+        inherit inputs;
+      };
+    });
 
     packages = forAllSystems (system: let
       pkgs = nixpkgs.legacyPackages.${system};
@@ -39,8 +40,13 @@
         buildPhase = ''
           runHook preBuild
 
-          # Set up Deno cache directory
+          # Set up Deno cache directory and copy denort from nixpkgs deno
           export DENO_DIR=$TMPDIR/deno_cache
+          mkdir -p $DENO_DIR/bin
+
+          # Copy the denort binary from the nixpkgs deno package
+          cp ${pkgs.deno}/bin/denort $DENO_DIR/bin/denort
+          chmod +x $DENO_DIR/bin/denort
 
           # Cache dependencies if deno.lock exists
           ${pkgs.lib.optionalString (builtins.pathExists ./deno.lock) ''
@@ -48,7 +54,7 @@
             deno cache --lock=deno.lock src/main.ts
           ''}
 
-          # Compile to binary with specific permissions
+          # Compile to binary - now it will use the local denort
           deno compile \
             --allow-read=/etc/lanserver \
             --allow-run \
@@ -86,7 +92,6 @@
       default = self.nixosModules.lanserver;
     };
 
-    # For backwards compatibility
     nixosModule = self.nixosModules.default;
   };
 }
