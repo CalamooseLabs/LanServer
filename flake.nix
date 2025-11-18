@@ -77,13 +77,12 @@
       # Step 3: Final compilation derivation
       lanserver = pkgs.stdenv.mkDerivation {
         name = "lanserver";
-        version = "1.0.0";
+        version = "1.0.1";
         src = ./.;
 
         nativeBuildInputs = with pkgs; [
           deno
           unzip
-          # autoPatchelfHook # Essential for NixOS
         ];
 
         # Disable automatic ELF patching

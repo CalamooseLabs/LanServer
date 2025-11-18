@@ -74,9 +74,26 @@ in {
       default = ["192.168.0.0/16" "10.0.0.0/8" "172.16.0.0/12"];
       description = "Local network subnets to allow access from";
     };
+
+    enableNixLd = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to enable nix-ld for running the compiled Deno binary";
+    };
   };
 
   config = mkIf cfg.enable {
+    # Enable nix-ld for running unpatched Deno binaries
+    programs.nix-ld = mkIf cfg.enableNixLd {
+      enable = true;
+      libraries = with pkgs; [
+        stdenv.cc.cc.lib
+        glibc
+        zlib
+        openssl
+      ];
+    };
+
     # Create config directory and file
     environment.etc."lanserver/config.json".source = configFile;
 
@@ -117,7 +134,6 @@ in {
 
           Environment = [
             "PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin"
-            "LD_LIBRARY_PATH=${pkgs.lib.makeLibraryPath [pkgs.glibc pkgs.gcc-unwrapped.lib]}"
           ];
         }
         // (optionalAttrs (!cfg.runAsRoot) {
